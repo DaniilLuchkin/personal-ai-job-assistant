@@ -29,6 +29,12 @@ export async function uploadResumeFile(settings: Settings, resumeId: string, fil
   if (!response.ok) throw new Error(`Resume upload failed (${response.status})`);
 }
 
+export async function downloadResumeFile(settings: Settings, resumeId: string): Promise<Blob> {
+  const response = await fetch(`${baseUrl(settings)}/api/v1/resumes/${encodeURIComponent(resumeId)}/file`, { headers: settings.backendToken ? { Authorization: `Bearer ${settings.backendToken}` } : {} });
+  if (!response.ok) throw new Error(`Resume download failed (${response.status})`);
+  return response.blob();
+}
+
 export async function backendChat(settings: Settings, request: { system: string; user: string; temperature?: number; maxTokens?: number }): Promise<{ content: string; model: string }> {
   const response = await fetch(`${baseUrl(settings)}/api/v1/llm/chat`, { method: 'POST', headers: headers(settings), body: JSON.stringify({ ...request, max_tokens: request.maxTokens }) });
   if (!response.ok) throw new Error(`Server LLM request failed (${response.status})`);

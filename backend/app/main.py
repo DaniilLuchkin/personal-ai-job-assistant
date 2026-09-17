@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+import re
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -81,3 +83,15 @@ async def upload_resume_file(resume_id: str, file: UploadFile = File(...), _user
     path = Path(settings.data_dir) / "resumes" / f"{resume_id}{suffix}"
     path.write_bytes(content)
     return {"resume_id": resume_id, "stored": str(path)}
+
+
+@app.get("/api/v1/resumes/{resume_id}/file")
+def download_resume_file(resume_id: str, _user: User = Depends(get_current_user)) -> FileResponse:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,180}", resume_id):
+        raise HTTPException(status_code=400, detail="Invalid resume id")
+    directory = Path(settings.data_dir) / "resumes"
+    matches = list(directory.glob(f"{resume_id}.pdf")) + list(directory.glob(f"{resume_id}.docx"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Resume file not found")
+    path = matches[0]
+    return FileResponse(path, filename=path.name)
