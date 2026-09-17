@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Orbit — Personal AI Job Assistant",
+  "version": "0.1.0",
+  "description": "Local-first job analysis, resume matching and application assistant.",
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "sidePanel", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "Open Orbit" },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }],
+  "options_page": "sidepanel.html"
+}

@@ -1,0 +1,5 @@
+import { describe, expect, it } from 'vitest';
+import { HeuristicProvider } from './HeuristicProvider';
+import type { Job, Resume, UserProfile } from '../../types/models';
+const job = { id: 'j', title: 'Project Manager', company: 'Acme', location: 'Remote', description: 'Manage projects using Jira and Excel', requirements: ['Jira'], responsibilities: ['Manage projects'], skills: ['Jira'], preferredQualifications: [], status: 'Saved', source: 'test', sourceUrl: 'https://example.com', discoveredAt: '', lastSeenAt: '', notes: '', statusHistory: [], lastActivityAt: '', remoteType: 'remote', benefits: [] } as Job;
+describe('local LLM fallback', () => { it('returns explainable match results without a network call', async () => { const resume = { id: 'r', name: 'Base', parsedText: 'Project Manager Jira Excel', structuredData: { jobTitles: ['Project Manager'], skills: ['Jira', 'Excel'] } } as Resume; const result = await new HeuristicProvider().analyzeJob(job, [resume], {} as UserProfile); expect(result.matches[0].resumeId).toBe('r'); expect(result.matches[0].score).toBeGreaterThan(0); expect(result.analysis.mandatoryRequirements).toContain('Jira'); }); });

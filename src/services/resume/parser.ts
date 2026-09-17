@@ -1,0 +1,35 @@
+import { normalizeText } from '../../utils/text';
+import type { ResumeStructuredData } from '../../types/models';
+
+export async function extractResumeText(file: File): Promise<string> {
+  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+    const mammoth = await import('mammoth');
+    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+    return normalizeText(result.value);
+  }
+  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const pages: string[] = [];
+    for (let index = 1; index <= pdf.numPages; index += 1) {
+      const page = await pdf.getPage(index);
+      const content = await page.getTextContent();
+      pages.push(content.items.map((item) => 'str' in item ? item.str : '').join(' '));
+    }
+    return normalizeText(pages.join('\n'));
+  }
+  return normalizeText(await file.text());
+}
+
+const emptyStructured = (): ResumeStructuredData => ({ jobTitles: [], skills: [], companies: [], workExperience: [], achievements: [], projects: [], education: [], certifications: [], languages: [], tools: [], industries: [] });
+
+export function heuristicResumeData(text: string): ResumeStructuredData {
+  const data = emptyStructured();
+  const email = text.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/)?.[0];
+  const phone = text.match(/(?:\+?\d[\d\s().-]{7,}\d)/)?.[0];
+  const lines = text.split(/\n|\r/).map((line) => line.trim()).filter(Boolean);
+  const skillsLine = lines.find((line) => /skills|technologies|tools/i.test(line));
+  const skills = skillsLine?.split(/skills?:|technologies?:|tools?:/i)[1]?.split(/,|\||;/).map((s) => s.trim()).filter(Boolean) ?? [];
+  const titleLines = lines.filter((line) => /manager|coordinator|analyst|engineer|designer|developer|specialist|director|lead/i.test(line)).slice(0, 8);
+  return { ...data, email, phone, fullName: lines[0], skills, jobTitles: titleLines };
+}
