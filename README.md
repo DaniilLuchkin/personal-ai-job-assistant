@@ -44,13 +44,13 @@ The extension works without the backend. To enable sync, deploy the included Com
 ```bash
 cp backend/.env.example backend/.env
 cp .env.example .env
-# set ORBIT_DB_PASSWORD and ORBIT_DOMAIN in .env
+# set ORBIT_DB_PASSWORD and ORBIT_HTTP_PORT in .env
 # set ORBIT_USER_EMAIL, ORBIT_USER_PASSWORD, provider keys and CORS_ORIGINS in backend/.env
 docker compose up -d --build
 docker compose logs -f api
 ```
 
-Point DNS `ORBIT_DOMAIN` to the VM public IP and allow TCP 80/443 in the Oracle Cloud security list and VM firewall. Caddy provisions HTTPS automatically. Do not expose port 5432 or 8000. In the extension, enable **Settings → Cloud sync**, enter the HTTPS API URL, and sign in with the configured account. Data is written locally first; sync failures do not lose the local record.
+For temporary IP mode, allow TCP `ORBIT_HTTP_PORT` (default `8088`) in the Oracle Cloud security list and VM firewall. Use `http://PUBLIC_IP:8088` in the extension. This mode is intentionally temporary and has no transport encryption; use a domain and HTTPS before handling real application data. Do not expose port 5432 or 8000. In the extension, enable **Settings → Cloud sync**, enter the API URL, and sign in with the configured account. Data is written locally first; sync failures do not lose the local record.
 
 The server stores structured entities in PostgreSQL and uploaded resume files in the `orbit_data` Docker volume. Create encrypted backups of both volumes. The server-side LLM gateway means provider keys do not need to be placed in the extension.
 

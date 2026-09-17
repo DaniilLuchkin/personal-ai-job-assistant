@@ -1,4 +1,4 @@
-{$ORBIT_DOMAIN} {
+:80 {
   encode gzip
   reverse_proxy api:8000
 }
