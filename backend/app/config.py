@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "postgresql+psycopg://orbit:orbit@db:5432/orbit"
     orbit_api_token: str = ""
+    orbit_user_email: str = ""
+    orbit_user_password: str = ""
+    session_days: int = 30
     openrouter_api_key: str = ""
     openrouter_model: str = ""
     apify_api_key: str = ""

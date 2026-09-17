@@ -2,7 +2,9 @@
 
 ## Local-first boundary
 
-The extension has no backend, auth or account system. IndexedDB is the source of truth in the browser. The service worker is a message bridge and lifecycle boundary, not a second database.
+The Oracle backend is the source of truth when Cloud sync is enabled. IndexedDB remains an offline-first cache so a server outage cannot discard user input. The service worker is a message bridge and lifecycle boundary, not a second database.
+
+Each computer signs in through `POST /api/v1/auth/login`. The server creates a random, hashed, expiring bearer session. Passwords are never stored in the extension; only the session token is stored locally. The initial single-user account is seeded from `ORBIT_USER_EMAIL` and `ORBIT_USER_PASSWORD` at first backend startup.
 
 ## Message protocol
 
@@ -14,9 +16,11 @@ The side panel sends a typed command with `tabId` to the service worker. The wor
 
 The content script never calls an LLM and never submits a form.
 
+Provider calls are server-side when the extension has a valid Cloud sync session. This keeps OpenRouter and Apify secrets on Oracle. If Cloud sync is off, the existing local OpenRouter/fallback path remains available for development and offline use.
+
 ## Data lifecycle
 
-1. A resume file is parsed locally, the original `Blob` is retained, and structured data is produced by OpenRouter or fallback extraction.
+1. A resume file is parsed locally, the original `Blob` is retained, structured data is produced by the server OpenRouter gateway or fallback extraction, and the structured record plus original file are synced when enabled.
 2. Analyze creates or updates one deduplicated `Job`, then creates a `JobSession`.
 3. Analysis stores explainable `matches` on the Job and selects the top candidate without deleting any resume.
 4. Form fields are classified and remain editable. Filling is an explicit user action.
