@@ -35,6 +35,10 @@ def get_current_user(authorization: str | None = Header(default=None), x_orbit_t
     token = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else x_orbit_token
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if settings.orbit_api_token and hmac.compare_digest(token, settings.orbit_api_token):
+        user = db.get(User, "default")
+        if user:
+            return user
     session = db.get(AuthSession, hashlib.sha256(token.encode()).hexdigest())
     if not session or session.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session")

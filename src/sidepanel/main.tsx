@@ -39,8 +39,13 @@ import {
   heuristicResumeData,
 } from "../services/resume/parser";
 import { getLLMProvider } from "../services/llm/providerFactory";
-import { normalizePageContext } from "../services/parser/normalization";
+import { HeuristicProvider } from "../services/llm/HeuristicProvider";
+import {
+  normalizeExternalJob,
+  normalizePageContext,
+} from "../services/parser/normalization";
 import { findDuplicateJob } from "../services/parser/deduplication";
+import { ApifyProvider } from "../services/parser/ApifyProvider";
 import { buildFieldContext } from "../services/context/buildFieldContext";
 import {
   fetchOpenRouterModels,
@@ -49,6 +54,7 @@ import {
 import { now, uid } from "../utils/id";
 import { syncRecord } from "../services/api/backendClient";
 import {
+  deleteRemoteRecord,
   downloadResumeFile,
   loginBackend,
   pullRecords,
@@ -71,7 +77,7 @@ const profileValue = (label: string, profile: UserProfile) => {
   const l = label.toLowerCase();
   if (/first.?name/.test(l)) return profile.firstName;
   if (/last.?name/.test(l)) return profile.lastName;
-  if (/full.?name|name/.test(l)) return profile.fullName;
+  if (/full.?name|^name$/.test(l)) return profile.fullName;
   if (/e-?mail/.test(l)) return profile.email;
   if (/phone|mobile/.test(l)) return profile.phone;
   if (/address/.test(l)) return profile.address;
@@ -196,18 +202,27 @@ function App() {
         setToast("Server unavailable; showing local cache");
       }
     }
-    const [j, r, p, s, k] = await Promise.all([
+    const [j, r, p, s, k, sessions] = await Promise.all([
       repos.jobs.list(),
       repos.resumes.list(),
       repos.profile.get(),
       repos.settings.get(),
       repos.knowledge.list(),
+      repos.sessions.list(),
     ]);
     setJobs(j.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt)));
     setResumes(r);
     setProfile(p ?? defaultProfile);
     setSettings(s ? { ...defaultSettings, ...s } : defaultSettings);
     setKnowledge(k);
+    if (!session) {
+      const activeSession = sessions
+        .filter((item) => item.status === "active")
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      setSession(activeSession ?? null);
+      setSelectedJobId(activeSession?.jobId);
+      setFields(activeSession?.formFields ?? []);
+    }
   };
   const sync = (type: string, id: string, payload: unknown) => {
     syncRecord(settings, type, id, payload).catch(() =>
@@ -220,6 +235,19 @@ function App() {
     );
   }, []);
   useEffect(() => {
+    if (!session) return;
+    const snapshot: JobSession = {
+      ...session,
+      formFields: fields,
+      updatedAt: now(),
+    };
+    const timer = setTimeout(() => {
+      repos.sessions.put(snapshot).catch(() => undefined);
+      syncRecord(settings, "session", snapshot.id, snapshot).catch(() => undefined);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [session, fields]);
+  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 3500);
     return () => clearTimeout(timer);
@@ -228,6 +256,7 @@ function App() {
     setToast(error instanceof Error ? error.message : "Something went wrong");
   const analyze = async () => {
     setBusy("analyze");
+    setFields([]);
     try {
       const response = await pageMessage({ type: "CAPTURE_PAGE_CONTEXT" });
       if (!response.ok || !("context" in response))
@@ -267,7 +296,15 @@ function App() {
       await repos.sessions.put(nextSession);
       setSession(nextSession);
       const provider = getLLMProvider(settings);
-      const result = await provider.analyzeJob(job, resumes, profile);
+      let analysisProvider = provider;
+      let result;
+      try {
+        result = await provider.analyzeJob(job, resumes, profile);
+      } catch (providerError) {
+        if (provider.name === "Local fallback") throw providerError;
+        analysisProvider = new HeuristicProvider();
+        result = await analysisProvider.analyzeJob(job, resumes, profile);
+      }
       const best = result.matches[0];
       const updated = {
         ...job,
@@ -286,7 +323,7 @@ function App() {
       setSession({ ...nextSession, updatedAt: now() });
       setView("session");
       setToast(
-        `${existing ? "Updated existing job" : "New job"} analyzed with ${provider.name}`,
+        `${existing ? "Updated existing job" : "New job"} analyzed with ${analysisProvider.name}`,
       );
     } catch (error) {
       notifyError(error);
@@ -346,17 +383,30 @@ function App() {
         (item) =>
           `${item.title}${item.company ? ` at ${item.company}` : ""}${item.dates ? ` (${item.dates})` : ""}${item.bullets?.length ? `: ${item.bullets.join("; ")}` : ""}`,
       );
+      const nameParts = (data.fullName || "").trim().split(/\s+/).filter(Boolean);
       const merged = {
         ...profile,
         firstName:
           profile.firstName ||
           data.firstName ||
-          data.fullName?.split(" ")[0] ||
+          nameParts[0] ||
           "",
-        lastName: profile.lastName || data.lastName || "",
+        lastName:
+          profile.lastName ||
+          data.lastName ||
+          (nameParts.length > 1 ? nameParts.slice(1).join(" ") : ""),
         fullName: profile.fullName || data.fullName || "",
         email: profile.email || data.email || "",
         phone: profile.phone || data.phone || "",
+        address: profile.address || data.address || "",
+        city: profile.city || data.city || "",
+        province: profile.province || data.province || "",
+        postalCode: profile.postalCode || data.postalCode || "",
+        linkedin: profile.linkedin || data.linkedin || "",
+        portfolio: profile.portfolio || data.portfolio || "",
+        website: profile.website || data.website || "",
+        workAuthorization:
+          profile.workAuthorization || data.workAuthorization || "",
         education: [
           ...new Set([...profile.education, ...(data.education || [])]),
         ],
@@ -408,11 +458,20 @@ function App() {
   const fillForm = async () => {
     setBusy("fill");
     try {
+      const activeJob = jobs.find((item) => item.id === session?.jobId);
+      const activeResume = activeJob?.resumeId
+        ? resumes.find((item) => item.id === activeJob.resumeId)
+        : undefined;
       const values = fields
         .filter((field) => field.category !== "ignore")
         .map((field) => ({
           selector: field.selector,
-          value: field.value || profileValue(field.label, profile),
+          value:
+            field.value ||
+            (field.category === "fixed"
+              ? profileValue(field.label, profile)
+              : cvValue(field.label, profile, activeResume)),
+          checked: field.checked,
         }))
         .filter((field) => field.value);
       const response = await pageMessage({
@@ -429,6 +488,9 @@ function App() {
                 value:
                   values.find((value) => value.selector === field.selector)
                     ?.value || field.value,
+                checked: values.find(
+                  (value) => value.selector === field.selector,
+                )?.checked ?? field.checked,
                 status: "filled",
                 source:
                   field.category === "fixed" ? "User Profile" : "Reusable data",
@@ -539,7 +601,7 @@ function App() {
           question: field.label,
           answer: field.value,
           createdAt: stamp,
-          edited: field.source === "User edit",
+          edited: field.source?.startsWith("User") || false,
         }));
       const updated = {
         ...job,
@@ -576,7 +638,20 @@ function App() {
         resumeVersionId: job.resumeVersionId,
         submittedAt: stamp,
         answers: finalAnswers,
-        metadata: { pageUrl: session.url, fieldsReviewed: fields.length },
+        metadata: {
+          pageUrl: session.url,
+          fieldsReviewed: fields.length,
+          fields: fields.map((field) => ({
+            id: field.id,
+            label: field.label,
+            selector: field.selector,
+            value: field.value,
+            checked: field.checked,
+            category: field.category,
+            source: field.source,
+            confidence: field.confidence,
+          })),
+        },
       };
       await repos.applications.put(application);
       sync("application", application.id, application);
@@ -591,20 +666,97 @@ function App() {
     }
   };
   const updateJobStatus = async (job: Job, status: Job["status"]) => {
-    const updated = {
-      ...job,
-      status,
-      statusHistory: [
-        ...(job.statusHistory || []),
-        { timestamp: now(), previousStatus: job.status, newStatus: status },
-      ],
-      lastActivityAt: now(),
-    };
-    await repos.jobs.put(updated);
-    sync("job", job.id, updated);
-    setJobs((items) =>
-      items.map((item) => (item.id === job.id ? updated : item)),
-    );
+    try {
+      const updated = {
+        ...job,
+        status,
+        statusHistory: [
+          ...(job.statusHistory || []),
+          { timestamp: now(), previousStatus: job.status, newStatus: status },
+        ],
+        lastActivityAt: now(),
+      };
+      await repos.jobs.put(updated);
+      sync("job", job.id, updated);
+      setJobs((items) =>
+        items.map((item) => (item.id === job.id ? updated : item)),
+      );
+      setToast(`Status changed to ${status}`);
+    } catch (error) {
+      notifyError(error);
+    }
+  };
+  const selectResume = async (job: Job, resumeId: string) => {
+    try {
+      const match = job.matches?.find((item) => item.resumeId === resumeId);
+      const updated = {
+        ...job,
+        resumeId,
+        matchScore: match?.score ?? job.matchScore,
+        lastActivityAt: now(),
+      };
+      await repos.jobs.put(updated);
+      sync("job", job.id, updated);
+      setJobs((items) =>
+        items.map((item) => (item.id === job.id ? updated : item)),
+      );
+      setToast("Resume selected for this application");
+    } catch (error) {
+      notifyError(error);
+    }
+  };
+  const refreshDashboard = async () => {
+    setBusy("refresh");
+    try {
+      await refresh();
+      setToast("View refreshed");
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setBusy("");
+    }
+  };
+  const runParser = async () => {
+    setBusy("parser");
+    try {
+      const provider = new ApifyProvider(settings.apifyApiKey, settings.apifyActor);
+      const imported = await provider.fetchJobs(settings);
+      const next = [...jobs];
+      let added = 0;
+      let updated = 0;
+      for (const item of imported) {
+        const candidate = normalizeExternalJob(item as unknown as Record<string, unknown>);
+        const existing = findDuplicateJob(candidate, next);
+        const job = existing
+          ? {
+              ...existing,
+              ...candidate,
+              id: existing.id,
+              discoveredAt: existing.discoveredAt,
+              status: existing.status,
+              statusHistory: existing.statusHistory,
+              notes: existing.notes,
+              lastActivityAt: now(),
+            }
+          : candidate;
+        await repos.jobs.put(job);
+        sync("job", job.id, job);
+        const index = next.findIndex((entry) => entry.id === job.id);
+        if (index >= 0) {
+          next[index] = job;
+          updated += 1;
+        } else {
+          next.push(job);
+          added += 1;
+        }
+      }
+      setJobs(next.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt)));
+      setToast(`Parser finished: ${added} new, ${updated} updated`);
+    } catch (error) {
+      notifyError(error);
+    } finally {
+      setBusy("");
+    }
   };
   const nav = [
     { id: "dashboard" as const, label: "Dashboard", icon: BriefcaseBusiness },
@@ -664,7 +816,15 @@ function App() {
             </h1>
           </div>
           <div className="top-actions">
-            <button className="icon-button" title="Help">
+            <button
+              className="icon-button"
+              title="Help"
+              onClick={() =>
+                setToast(
+                  "Open a vacancy, choose Analyze this job, then detect and review fields before filling.",
+                )
+              }
+            >
               <CircleHelp size={18} />
             </button>
             <div className="avatar">
@@ -688,9 +848,13 @@ function App() {
               query={query}
               setQuery={setQuery}
               onStatus={updateJobStatus}
+              onRefresh={refreshDashboard}
               onOpen={(job) => {
                 setSelectedJobId(job.id);
-                if (session?.jobId !== job.id) setSession(null);
+                if (session?.jobId !== job.id) {
+                  setSession(null);
+                  setFields([]);
+                }
                 setView("session");
               }}
             />
@@ -702,8 +866,15 @@ function App() {
               busy={busy}
               onUpload={uploadResume}
               onDelete={async (id) => {
-                await repos.resumes.delete(id);
-                setResumes((items) => items.filter((item) => item.id !== id));
+                if (!window.confirm("Delete this resume from local storage?")) return;
+                try {
+                  await deleteRemoteRecord(settings, "resume", id);
+                  await repos.resumes.delete(id);
+                  setResumes((items) => items.filter((item) => item.id !== id));
+                  setToast("Resume deleted locally");
+                } catch (error) {
+                  notifyError(error);
+                }
               }}
             />
           )}
@@ -719,13 +890,15 @@ function App() {
               onDetect={detectForm}
               onFill={fillForm}
               onGenerate={generateField}
-              onChangeField={(id, value) =>
+              onSelectResume={selectResume}
+              onChangeField={(id, value, checked) =>
                 setFields((items) =>
                   items.map((field) =>
                     field.id === id
                       ? {
                           ...field,
                           value,
+                          checked,
                           status: "review",
                           source: "User edit",
                         }
@@ -754,39 +927,60 @@ function App() {
             <SettingsView
               settings={settings}
               profile={profile}
+              busy={busy}
               onSettings={async (next) => {
-                setSettings(next);
-                await repos.settings.put(next);
-                setToast("Settings saved");
+                try {
+                  await repos.settings.put(next);
+                  setSettings(next);
+                  chrome.runtime
+                    .sendMessage({ type: "CONFIGURE_PARSER_ALARM" })
+                    .catch(() => undefined);
+                  setToast("Settings saved");
+                } catch (error) {
+                  notifyError(error);
+                }
               }}
               onProfile={async (next) => {
-                setProfile(next);
-                await repos.profile.put(next);
-                setToast("Profile saved");
+                try {
+                  await repos.profile.put(next);
+                  setProfile(next);
+                  setToast("Profile saved");
+                } catch (error) {
+                  notifyError(error);
+                }
               }}
+              onRunParser={runParser}
             />
           )}
           {view === "knowledge" && (
             <KnowledgeView
               items={knowledge}
               onAdd={async () => {
-                const item: KnowledgeItem = {
-                  id: uid("knowledge"),
-                  type: "custom",
-                  question: "Reusable note",
-                  answer: "Add a reusable fact or preferred answer.",
-                  tags: [],
-                  source: "User",
-                  confidence: 1,
-                  createdAt: now(),
-                  updatedAt: now(),
-                };
-                await repos.knowledge.put(item);
-                setKnowledge((items) => [...items, item]);
+                try {
+                  const item: KnowledgeItem = {
+                    id: uid("knowledge"),
+                    type: "custom",
+                    question: "Reusable note",
+                    answer: "Add a reusable fact or preferred answer.",
+                    tags: [],
+                    source: "User",
+                    confidence: 1,
+                    createdAt: now(),
+                    updatedAt: now(),
+                  };
+                  await repos.knowledge.put(item);
+                  setKnowledge((items) => [...items, item]);
+                } catch (error) {
+                  notifyError(error);
+                }
               }}
               onDelete={async (id) => {
-                await repos.knowledge.delete(id);
-                setKnowledge((items) => items.filter((item) => item.id !== id));
+                try {
+                  await repos.knowledge.delete(id);
+                  setKnowledge((items) => items.filter((item) => item.id !== id));
+                } catch (error) {
+                  notifyError(error);
+                }
               }}
             />
           )}
@@ -801,19 +995,37 @@ function Dashboard({
   query,
   setQuery,
   onStatus,
+  onRefresh,
   onOpen,
 }: {
   jobs: Job[];
   query: string;
   setQuery: (v: string) => void;
   onStatus: (job: Job, status: Job["status"]) => void;
+  onRefresh: () => Promise<void>;
   onOpen: (job: Job) => void;
 }) {
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [remoteFilter, setRemoteFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("all");
+  const [scoreFilter, setScoreFilter] = useState("all");
+  const sources = [...new Set(jobs.map((job) => job.source).filter(Boolean))].sort();
   const filtered = jobs.filter((job) =>
-    `${job.title} ${job.company} ${job.location}`
+    `${job.title} ${job.company} ${job.location} ${job.source}`
       .toLowerCase()
       .includes(query.toLowerCase()),
-  );
+  ).filter((job) =>
+    statusFilter === "all" ? true : job.status === statusFilter,
+  ).filter((job) =>
+    remoteFilter === "all" ? true : job.remoteType === remoteFilter,
+  ).filter((job) => sourceFilter === "all" ? true : job.source === sourceFilter)
+    .filter((job) => {
+      if (dateFilter === "all") return true;
+      const days = Number(dateFilter);
+      return Date.now() - new Date(job.discoveredAt).getTime() <= days * 24 * 60 * 60 * 1000;
+    })
+    .filter((job) => scoreFilter === "all" ? true : (job.matchScore || 0) >= Number(scoreFilter));
   const counts = ["Applied", "Interview", "Saved"].map((status) => ({
     status,
     count: jobs.filter((job) => job.status === status).length,
@@ -826,7 +1038,7 @@ function Dashboard({
             A clear view of every opportunity, from first look to offer.
           </p>
         </div>
-        <button className="secondary-button" onClick={() => setQuery("")}>
+        <button className="secondary-button" onClick={() => void onRefresh()}>
           <RefreshCw size={15} /> Refresh view
         </button>
       </div>
@@ -858,14 +1070,51 @@ function Dashboard({
           <h2>All opportunities</h2>
           <span className="count-pill">{filtered.length}</span>
         </div>
-        <label className="search">
-          <Search size={16} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search company, role, location"
-          />
-        </label>
+        <div className="dashboard-filters">
+          <label className="search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search company, role, location"
+            />
+          </label>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            {[
+              "Saved",
+              "Analyzing",
+              "Applied",
+              "Interview",
+              "Rejected",
+              "Offer",
+              "Withdrawn",
+              "Archived",
+            ].map((status) => <option key={status} value={status}>{status}</option>)}
+          </select>
+          <select value={remoteFilter} onChange={(event) => setRemoteFilter(event.target.value)}>
+            <option value="all">All work modes</option>
+            <option value="remote">Remote</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="on-site">On-site</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+            <option value="all">All sources</option>
+            {sources.map((source) => <option key={source} value={source}>{source}</option>)}
+          </select>
+          <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value)}>
+            <option value="all">Any date</option>
+            <option value="7">Last 7 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+          <select value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value)}>
+            <option value="all">Any match</option>
+            <option value="80">Match 80%+</option>
+            <option value="60">Match 60%+</option>
+          </select>
+        </div>
       </div>
       <div className="job-list">
         {filtered.length ? (
@@ -1113,6 +1362,7 @@ function SessionView({
   onDetect,
   onFill,
   onGenerate,
+  onSelectResume,
   onChangeField,
   onChangeCategory,
   onSave,
@@ -1127,7 +1377,8 @@ function SessionView({
   onDetect: () => void;
   onFill: () => void;
   onGenerate: (field: FormField) => void;
-  onChangeField: (id: string, value: string) => void;
+  onSelectResume: (job: Job, resumeId: string) => void;
+  onChangeField: (id: string, value: string, checked?: boolean) => void;
   onChangeCategory: (id: string, category: FormField["category"]) => void;
   onSave: () => void;
 }) {
@@ -1239,7 +1490,12 @@ function SessionView({
             job.matches.map((match) => {
               const resume = resumes.find((item) => item.id === match.resumeId);
               return (
-                <div className="match-row" key={match.resumeId}>
+                <button
+                  className={`match-row${job.resumeId === match.resumeId ? " selected" : ""}`}
+                  key={match.resumeId}
+                  onClick={() => onSelectResume(job, match.resumeId)}
+                  title="Use this resume for the application"
+                >
                   <div className="mini-file">
                     <FileText size={15} />
                   </div>
@@ -1251,7 +1507,7 @@ function SessionView({
                     </p>
                   </div>
                   <div className="mini-score">{match.score}%</div>
-                </div>
+                </button>
               );
             })
           ) : (
@@ -1335,17 +1591,43 @@ function SessionView({
                       {Math.round(field.confidence * 100)}% confidence
                     </small>
                   </div>
-                  <input
-                    value={field.value}
-                    onChange={(event) =>
-                      onChangeField(field.id, event.target.value)
-                    }
-                    placeholder={
-                      field.category === "llm"
-                        ? "Generate an answer or type your own"
-                        : "No value available"
-                    }
-                  />
+                  {field.type === "checkbox" || field.type === "radio" ? (
+                    <label className="choice-value">
+                      <input
+                        type={field.type}
+                        checked={Boolean(field.checked)}
+                        onChange={(event) =>
+                          onChangeField(
+                            field.id,
+                            field.value,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      <span>{field.checked ? "Selected" : "Not selected"}</span>
+                    </label>
+                  ) : field.type === "textarea" || field.type === "contenteditable" || field.category === "llm" ? (
+                    <textarea
+                      value={field.value}
+                      rows={field.category === "llm" ? 3 : 2}
+                      onChange={(event) =>
+                        onChangeField(field.id, event.target.value)
+                      }
+                      placeholder={
+                        field.category === "llm"
+                          ? "Generate an answer or type your own"
+                          : "No value available"
+                      }
+                    />
+                  ) : (
+                    <input
+                      value={field.value}
+                      onChange={(event) =>
+                        onChangeField(field.id, event.target.value)
+                      }
+                      placeholder="No value available"
+                    />
+                  )}
                   <button
                     className="small-button"
                     onClick={() => onGenerate(field)}
@@ -1403,27 +1685,40 @@ const IconFor = ({ category }: { category: FormField["category"] }) =>
 function SettingsView({
   settings,
   profile,
+  busy,
   onSettings,
   onProfile,
+  onRunParser,
 }: {
   settings: Settings;
   profile: UserProfile;
+  busy: string;
   onSettings: (value: Settings) => void;
   onProfile: (value: UserProfile) => void;
+  onRunParser: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<"profile" | "llm" | "parser">("profile");
   const [local, setLocal] = useState(settings);
   const [person, setPerson] = useState(profile);
   const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsMessage, setModelsMessage] = useState("");
   const patch = (key: keyof Settings, value: unknown) =>
-    setLocal({ ...local, [key]: value });
+    setLocal((current) => ({ ...current, [key]: value }));
   const patchPerson = (key: keyof UserProfile, value: string) =>
-    setPerson({ ...person, [key]: value });
+    setPerson((current) => ({ ...current, [key]: value }));
+  useEffect(() => setLocal(settings), [settings]);
+  useEffect(() => setPerson(profile), [profile]);
   const loadModels = async () => {
+    setModelsBusy(true);
+    setModelsMessage("");
     try {
       setModels(await fetchOpenRouterModels(local.openRouterApiKey));
-    } catch {
-      /* the editable model field and local fallback stay available */
+      setModelsMessage("Models loaded");
+    } catch (error) {
+      setModelsMessage(error instanceof Error ? error.message : "Unable to load models");
+    } finally {
+      setModelsBusy(false);
     }
   };
   return (
@@ -1516,8 +1811,9 @@ function SettingsView({
               <span className="eyebrow">PROVIDER</span>
               <h2>LLM settings</h2>
               <p className="muted">
-                Keys stay in this browser's IndexedDB and are sent only to the
-                selected provider.
+                {local.syncEnabled
+                  ? "Cloud sync is enabled; LLM requests use the Oracle gateway."
+                  : "Keys stay in this browser's IndexedDB and are sent only to the selected provider."}
               </p>
             </div>
             <button
@@ -1549,8 +1845,9 @@ function SettingsView({
                   className="small-button"
                   type="button"
                   onClick={loadModels}
+                  disabled={modelsBusy}
                 >
-                  Load models
+                  {modelsBusy ? "Loading…" : "Load models"}
                 </button>
                 <datalist id="openrouter-models">
                   {models.map((model) => (
@@ -1560,6 +1857,7 @@ function SettingsView({
                   ))}
                 </datalist>
               </div>
+              {modelsMessage && <small className="settings-message">{modelsMessage}</small>}
             </label>
             <label className="wide-field">
               <span>API key</span>
@@ -1614,8 +1912,7 @@ function SettingsView({
               <span className="eyebrow">JOB DISCOVERY</span>
               <h2>Apify parser</h2>
               <p className="muted">
-                Phase 2 provider interface is ready. Configure it for scheduled
-                discovery.
+                Configure Apify, save the settings, then run discovery manually.
               </p>
             </div>
             <button
@@ -1693,6 +1990,61 @@ function SettingsView({
                 }
               />
             </label>
+            <label>
+              <span>Keywords</span>
+              <input
+                value={local.keywords.join(", ")}
+                onChange={(event) =>
+                  patch("keywords", event.target.value.split(",").map((v) => v.trim()).filter(Boolean))
+                }
+              />
+            </label>
+            <label>
+              <span>Remote types</span>
+              <input
+                value={local.remoteTypes.join(", ")}
+                onChange={(event) =>
+                  patch("remoteTypes", event.target.value.split(",").map((v) => v.trim()).filter(Boolean))
+                }
+              />
+            </label>
+            <label>
+              <span>Platforms</span>
+              <input
+                value={local.platforms.join(", ")}
+                onChange={(event) =>
+                  patch("platforms", event.target.value.split(",").map((v) => v.trim()).filter(Boolean))
+                }
+              />
+            </label>
+            <label>
+              <span>Exclude keywords</span>
+              <input
+                value={local.excludeKeywords.join(", ")}
+                onChange={(event) =>
+                  patch("excludeKeywords", event.target.value.split(",").map((v) => v.trim()).filter(Boolean))
+                }
+              />
+            </label>
+            <label>
+              <span>Minimum salary</span>
+              <input
+                type="number"
+                min="0"
+                value={local.minimumSalary ?? ""}
+                onChange={(event) => patch("minimumSalary", event.target.value ? Number(event.target.value) : undefined)}
+              />
+            </label>
+          </div>
+          <div className="button-row parser-actions">
+            <button
+              className="secondary-button"
+              onClick={() => void onRunParser()}
+              disabled={busy === "parser"}
+            >
+              {busy === "parser" ? "Running…" : "Run parser now"}
+            </button>
+            <span className="muted">Manual run uses the saved Apify settings.</span>
           </div>
         </div>
       )}

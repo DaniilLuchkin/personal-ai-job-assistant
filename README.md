@@ -15,13 +15,13 @@ A local-first Manifest V3 Chrome Extension for the real MVP workflow:
 - OpenRouter provider abstraction plus local fallback; prompts live under `src/services/llm/prompts`.
 - Explainable job analysis and resume matching (0–100 score, strengths, missing requirements and recommendation).
 - Typed service-worker/content-script messaging.
-- Multi-level form detection using semantics, labels, ARIA, placeholders and known patterns, with confidence scores.
+- Multi-level form detection using semantics, labels, ARIA, placeholders and known patterns, with confidence scores, stable selectors and checkbox/radio support.
 - Fixed/reusable/LLM/ignore field categories, preview/editing, generate/regenerate one answer at a time, and explicit “Application submitted” save action. The extension never clicks Submit.
 - Dashboard statuses: Saved, Analyzing, Applied, Interview, Rejected, Offer, Withdrawn, Archived; search and manual status changes with history.
-- Apify provider interface and parser settings are included for Phase 2 scheduling/discovery.
+- Apify discovery can be started manually from Settings and scheduled through Chrome alarms (`*/N * * * *` or daily `M H * * *` schedules).
 - Optional Oracle backend: FastAPI + PostgreSQL + Caddy, token-protected sync API, server-side OpenRouter gateway and resume file storage endpoint.
 
-Resume adaptation/versioning, advanced screenshot/PDF understanding, scheduled Apify execution, import/export and multi-provider additions are intentionally Phase 2/3 extensions after the core workflow.
+Resume adaptation/versioning, advanced screenshot/PDF understanding, import/export and multi-provider additions remain Phase 2/3 extensions after the core workflow.
 
 ## Development
 
@@ -53,13 +53,13 @@ docker compose logs -f api
 
 For temporary IP mode, allow TCP `ORBIT_HTTP_PORT` (default `8088`) in the Oracle Cloud security list and VM firewall. Use `http://PUBLIC_IP:8088` in the extension. This mode is intentionally temporary and has no transport encryption; use a domain and HTTPS before handling real application data. Do not expose port 5432 or 8000. In the extension, enable **Settings → Cloud sync**, enter the API URL, and sign in with the configured account. Data is written locally first; sync failures do not lose the local record.
 
-The server stores structured entities in PostgreSQL and uploaded resume files in the `orbit_data` Docker volume. Create encrypted backups of both volumes. The server-side LLM gateway means provider keys do not need to be placed in the extension.
+The server stores structured entities in PostgreSQL and uploaded resume files in the `orbit_data` Docker volume. Create encrypted backups of both volumes. The server-side LLM gateway means provider keys do not need to be placed in the extension. Sync pulls are paginated and resume deletion removes the corresponding remote record and file.
 
 ## Provider setup
 
 Open **Settings → LLM provider**, enter an OpenRouter API key and a model ID (for example, any current `openai/...`, `anthropic/...`, `google/...` or `deepseek/...` model available to your account). The model is intentionally free text so it is not coupled to a stale hardcoded list. The OpenRouter request is sent only when the user invokes analysis or generation. Without a key, the local heuristic provider keeps the MVP usable.
 
-Open **Settings → Job parser** to configure Apify API key, actor, schedule, titles and locations. `ApifyProvider` implements the provider boundary; scheduling/actor-specific result mapping is the next phase.
+Open **Settings → Job parser** to configure Apify API key, actor, schedule, titles and locations. Click **Save settings**, then use **Run parser now** for an immediate import. When enabled, Chrome schedules the parser alarm; supported schedule forms are `*/N * * * *` and daily `M H * * *`. Imported jobs are normalized and deduplicated before entering the dashboard.
 
 ## Architecture
 
@@ -83,7 +83,7 @@ Side Panel (React)
 
 ### Job Session behavior
 
-Analyze captures the current tab’s bounded HTML snapshot, visible text, URL and metadata, normalizes it into `Job`, deduplicates by external ID/canonical URL/company-title-location, persists a `JobSession`, and then runs analysis. A screenshot is not required for Phase 1; failure of any optional context element does not discard the session. Application answers are persisted with the session and an `ApplicationRecord`.
+Analyze captures the current tab’s bounded HTML snapshot, visible text, URL and metadata, normalizes it into `Job`, deduplicates by external ID/canonical URL/company-title-location, persists a `JobSession`, and then runs analysis. A screenshot is not required for Phase 1; failure of any optional context element does not discard the session. Active sessions and detected fields are autosaved locally and restored when the side panel reopens; closing the tab closes the session. Application answers are persisted with the session and an `ApplicationRecord`.
 
 ### Privacy
 

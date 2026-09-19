@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 import re
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +13,8 @@ from .schemas import LLMRequest, LLMResponse, LoginRequest, LoginResponse, SyncR
 from .security import get_current_user, issue_token, password_hash, password_matches
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["Content-Type", "Authorization", "X-Orbit-Token"])
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "Authorization", "X-Orbit-Token"])
+ALLOWED_ENTITY_TYPES = {"job", "resume", "session", "knowledge", "profile", "application"}
 
 
 @app.on_event("startup")
@@ -44,6 +45,8 @@ def login(request: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
 @app.post("/api/v1/sync/push", response_model=SyncResponse)
 def sync_push(request: SyncRequest, _user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> SyncResponse:
     for item in request.records:
+        if item.entity_type not in ALLOWED_ENTITY_TYPES:
+            raise HTTPException(status_code=400, detail=f"Unsupported entity type: {item.entity_type}")
         key = f"{item.entity_type}:{item.entity_id}"
         record = db.get(Record, key) or Record(key=key, entity_type=item.entity_type, entity_id=item.entity_id, payload=item.payload)
         record.payload = item.payload
@@ -53,11 +56,27 @@ def sync_push(request: SyncRequest, _user: User = Depends(get_current_user), db:
 
 
 @app.get("/api/v1/sync/pull")
-def sync_pull(entity_type: str | None = None, _user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
-    query = select(Record).order_by(Record.updated_at.desc()).limit(500)
+def sync_pull(entity_type: str | None = None, offset: int = Query(default=0, ge=0), limit: int = Query(default=500, ge=1, le=500), _user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+    query = select(Record).order_by(Record.updated_at.desc()).offset(offset).limit(limit)
     if entity_type:
         query = query.where(Record.entity_type == entity_type)
     return [{"entity_type": row.entity_type, "entity_id": row.entity_id, "payload": row.payload, "updated_at": row.updated_at} for row in db.scalars(query).all()]
+
+
+@app.delete("/api/v1/sync/{entity_type}/{entity_id}")
+def sync_delete(entity_type: str, entity_id: str, _user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, bool]:
+    if entity_type not in ALLOWED_ENTITY_TYPES or not re.fullmatch(r"[A-Za-z0-9_-]{1,180}", entity_id):
+        raise HTTPException(status_code=400, detail="Invalid sync record")
+    record = db.get(Record, f"{entity_type}:{entity_id}")
+    if record:
+        db.delete(record)
+        db.commit()
+    if entity_type == "resume":
+        directory = Path(settings.data_dir) / "resumes"
+        for path in directory.glob(f"{entity_id}.*"):
+            if path.suffix in {".pdf", ".docx"}:
+                path.unlink(missing_ok=True)
+    return {"deleted": bool(record)}
 
 
 @app.get("/api/v1/dashboard/jobs")
@@ -74,11 +93,15 @@ async def llm_chat(request: LLMRequest, _user: User = Depends(get_current_user))
 
 @app.post("/api/v1/resumes/{resume_id}/file")
 async def upload_resume_file(resume_id: str, file: UploadFile = File(...), _user: User = Depends(get_current_user)) -> dict[str, str]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,180}", resume_id):
+        raise HTTPException(status_code=400, detail="Invalid resume id")
     if file.content_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}:
         raise HTTPException(status_code=415, detail="Only PDF and DOCX resumes are accepted")
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Resume file is too large")
+    if (file.content_type == "application/pdf" and not content.startswith(b"%PDF-")) or (file.content_type.endswith("wordprocessingml.document") and not content.startswith(b"PK")):
+        raise HTTPException(status_code=415, detail="Uploaded file content does not match its type")
     suffix = ".pdf" if file.content_type == "application/pdf" else ".docx"
     path = Path(settings.data_dir) / "resumes" / f"{resume_id}{suffix}"
     path.write_bytes(content)
