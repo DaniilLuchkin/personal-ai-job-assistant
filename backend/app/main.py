@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Lock, Thread
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 import re
@@ -7,19 +9,53 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from .config import settings
-from .db import AuthSession, Record, User, get_db, init_db
+from .db import AuthSession, Record, SessionLocal, User, get_db, init_db
 from .llm import openrouter_chat
-from .schemas import LLMRequest, LLMResponse, LoginRequest, LoginResponse, SyncRequest, SyncResponse
+from .parser import run_apify_parser, schedule_due
+from .schemas import LLMRequest, LLMResponse, LoginRequest, LoginResponse, ParserConfig, SyncRequest, SyncResponse
 from .security import get_current_user, issue_token, password_hash, password_matches
 from .rate_limit import allow_request
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "Authorization", "X-Orbit-Token"])
-ALLOWED_ENTITY_TYPES = {"job", "resume", "session", "knowledge", "profile", "application"}
+ALLOWED_ENTITY_TYPES = {"job", "resume", "session", "knowledge", "field_rule", "parser_settings", "profile", "application"}
+parser_stop = Event()
+parser_thread: Thread | None = None
+parser_lock = Lock()
 
 
-@app.on_event("startup")
-def startup() -> None:
+def _save_parser_result(db: Session, record: Record, result: dict | None = None, error: str | None = None) -> None:
+    payload = dict(record.payload)
+    payload["lastRunAt"] = datetime.now(timezone.utc).isoformat()
+    payload["lastError"] = error
+    if result is not None:
+        payload["lastResult"] = result
+    record.payload = payload
+    db.add(record)
+    db.commit()
+
+
+def _parser_loop() -> None:
+    while not parser_stop.wait(30):
+        with SessionLocal() as db:
+            record = db.get(Record, "parser_settings:default")
+            if not record or not record.payload.get("enabled") or not schedule_due(str(record.payload.get("schedule", "")), record.payload.get("lastRunAt")):
+                continue
+            try:
+                if not parser_lock.acquire(blocking=False):
+                    continue
+                try:
+                    result = run_apify_parser(db, record.payload)
+                finally:
+                    parser_lock.release()
+                _save_parser_result(db, record, result)
+            except HTTPException as error:
+                _save_parser_result(db, record, error=str(error.detail))
+            except Exception:
+                _save_parser_result(db, record, error="Unexpected parser failure")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global parser_thread
     init_db()
     (Path(settings.data_dir) / "resumes").mkdir(parents=True, exist_ok=True)
     if settings.orbit_user_email and settings.orbit_user_password:
@@ -28,6 +64,20 @@ def startup() -> None:
             if not db.scalar(select(User).where(User.email == settings.orbit_user_email.lower().strip())):
                 db.add(User(id="default", email=settings.orbit_user_email.lower().strip(), password_hash=password_hash(settings.orbit_user_password)))
                 db.commit()
+    if parser_thread is None or not parser_thread.is_alive():
+        parser_stop.clear()
+        parser_thread = Thread(target=_parser_loop, name="orbit-parser", daemon=True)
+        parser_thread.start()
+    try:
+        yield
+    finally:
+        parser_stop.set()
+        if parser_thread and parser_thread.is_alive():
+            parser_thread.join(timeout=2)
+
+
+app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=False, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Content-Type", "Authorization", "X-Orbit-Token"])
 
 
 @app.get("/health")
@@ -54,7 +104,18 @@ def sync_push(request: SyncRequest, _user: User = Depends(get_current_user), db:
             raise HTTPException(status_code=400, detail=f"Unsupported entity type: {item.entity_type}")
         key = f"{item.entity_type}:{item.entity_id}"
         record = db.get(Record, key) or Record(key=key, entity_type=item.entity_type, entity_id=item.entity_id, payload=item.payload)
-        record.payload = item.payload
+        payload = item.payload
+        if item.entity_type == "session" and record.payload and payload.get("screenshots"):
+            previous = {entry.get("id"): entry for entry in record.payload.get("screenshots", []) if isinstance(entry, dict)}
+            payload = {**payload, "screenshots": [{**entry, "dataUrl": entry.get("dataUrl") or previous.get(entry.get("id"), {}).get("dataUrl", "")} if isinstance(entry, dict) else entry for entry in payload["screenshots"]]}
+        if item.entity_type == "session" and record.payload:
+            previous_page = record.payload.get("pageContext", {}) if isinstance(record.payload.get("pageContext"), dict) else {}
+            previous_application = record.payload.get("applicationPageContext", {}) if isinstance(record.payload.get("applicationPageContext"), dict) else {}
+            if isinstance(payload.get("pageContext"), dict) and not payload["pageContext"].get("htmlSnapshot"):
+                payload["pageContext"]["htmlSnapshot"] = previous_page.get("htmlSnapshot")
+            if isinstance(payload.get("applicationPageContext"), dict) and not payload["applicationPageContext"].get("htmlSnapshot"):
+                payload["applicationPageContext"]["htmlSnapshot"] = previous_application.get("htmlSnapshot")
+        record.payload = payload
         db.add(record)
     db.commit()
     return SyncResponse(accepted=len(request.records), server_time=datetime.now(timezone.utc))
@@ -84,6 +145,18 @@ def sync_delete(entity_type: str, entity_id: str, _user: User = Depends(get_curr
     return {"deleted": bool(record)}
 
 
+@app.delete("/api/v1/data")
+def clear_all_data(_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, int]:
+    deleted = len(db.scalars(select(Record)).all())
+    db.execute(delete(Record))
+    db.commit()
+    directory = Path(settings.data_dir) / "resumes"
+    for path in directory.glob("*"):
+        if path.is_file() and path.suffix in {".pdf", ".docx"}:
+            path.unlink(missing_ok=True)
+    return {"deleted": deleted}
+
+
 @app.get("/api/v1/dashboard/jobs")
 def dashboard_jobs(_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(Record).where(Record.entity_type == "job").order_by(Record.updated_at.desc())).all()
@@ -96,6 +169,43 @@ async def llm_chat(request: LLMRequest, http_request: Request, _user: User = Dep
         raise HTTPException(status_code=429, detail="LLM request rate limit exceeded; try again later")
     content, model = await openrouter_chat(request)
     return LLMResponse(content=content, model=model)
+
+
+@app.post("/api/v1/parser/config")
+def parser_config(config: ParserConfig, _user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    key = "parser_settings:default"
+    record = db.get(Record, key)
+    previous = record.payload if record else {}
+    payload = {**config.model_dump(), "lastRunAt": previous.get("lastRunAt"), "lastResult": previous.get("lastResult"), "lastError": previous.get("lastError")}
+    record = record or Record(key=key, entity_type="parser_settings", entity_id="default", payload=payload)
+    record.payload = payload
+    db.add(record)
+    db.commit()
+    return {"saved": True, "server_configured": bool(settings.apify_api_key and (config.actor or settings.apify_actor)), "status": payload}
+
+
+@app.get("/api/v1/parser/status")
+def parser_status(_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    record = db.get(Record, "parser_settings:default")
+    return {"server_configured": bool(settings.apify_api_key and (record and (record.payload.get("actor") or settings.apify_actor))), "status": record.payload if record else None}
+
+
+@app.post("/api/v1/parser/run")
+def parser_run(_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    record = db.get(Record, "parser_settings:default")
+    if not record:
+        raise HTTPException(status_code=400, detail="Save parser settings before running the server parser")
+    if not parser_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="The parser is already running")
+    try:
+        result = run_apify_parser(db, record.payload)
+        _save_parser_result(db, record, result=result)
+        return result
+    except HTTPException as error:
+        _save_parser_result(db, record, error=str(error.detail))
+        raise
+    finally:
+        parser_lock.release()
 
 
 @app.post("/api/v1/resumes/{resume_id}/file")

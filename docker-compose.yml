@@ -12,6 +12,12 @@ services:
       - orbit_data:/app/data
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -38,7 +44,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 volumes:
   orbit_db:
   orbit_data:

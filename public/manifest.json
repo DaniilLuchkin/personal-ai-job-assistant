@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Orbit — Personal AI Job Assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first job analysis, resume matching and application assistant.",
   "permissions": ["storage", "tabs", "activeTab", "scripting", "sidePanel", "alarms"],
   "host_permissions": ["<all_urls>"],

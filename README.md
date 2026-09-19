@@ -12,16 +12,19 @@ A local-first Manifest V3 Chrome Extension for the real MVP workflow:
 - Local OCR fallback for scanned PDFs using bundled Tesseract.js `eng` + `rus` models; document images are not sent to the server.
 - Resume structured-data extraction through OpenRouter when configured, with a local heuristic fallback.
 - Client-side page context extraction (URL, visible text, bounded HTML snapshot and basic metadata).
+- Schema.org/JSON-LD job metadata extraction, screenshot capture for sparse pages, linked-PDF discovery and direct PDF-page text analysis.
 - OpenRouter provider abstraction plus local fallback; prompts live under `src/services/llm/prompts`.
 - Explainable job analysis and resume matching (0–100 score, strengths, missing requirements and recommendation).
 - Typed service-worker/content-script messaging.
-- Multi-level form detection using semantics, labels, ARIA, placeholders and known patterns, with confidence scores, stable selectors and checkbox/radio support.
-- Fixed/reusable/LLM/ignore field categories, preview/editing, generate/regenerate one answer at a time, and explicit “Application submitted” save action. The extension never clicks Submit.
+- Multi-level form detection across accessible frames using semantics, labels, ARIA, placeholders and known patterns, with confidence scores, stable selectors, selects, checkbox/radio and resume file-upload support.
+- Fixed/reusable/LLM/ignore field categories, global field rules, per-field prompts, explicit learning from corrections, generate/regenerate one answer at a time, and explicit “Application submitted” save action. Password and demographic fields are ignored by default. The extension never clicks Submit.
+- Truthful LLM resume adaptation with side-by-side review. Saving creates a separate downloadable DOCX version linked to the source resume and job.
 - Dashboard statuses: Saved, Analyzing, Applied, Interview, Rejected, Offer, Withdrawn, Archived; search and manual status changes with history.
-- Apify discovery can be started manually from Settings and scheduled through Chrome alarms (`*/N * * * *` or daily `M H * * *` schedules).
+- Apify discovery can run manually or on a schedule either in Chrome or continuously on Oracle (`*/N * * * *` or daily `M H * * *`, UTC).
 - Optional Oracle backend: FastAPI + PostgreSQL + Caddy, token-protected sync API, server-side OpenRouter gateway and resume file storage endpoint.
+- Settings data management for local JSON backup/restore (including resume files, excluding secrets) and explicit local/server data deletion.
 
-Resume adaptation/versioning, advanced screenshot/PDF understanding, import/export and multi-provider additions remain Phase 2/3 extensions after the core workflow.
+Import/export, richer document-layout preservation and additional LLM/job-source providers remain later extensions after the working core workflow.
 
 ## Development
 
@@ -59,9 +62,11 @@ The server stores structured entities in PostgreSQL and uploaded resume files in
 
 Open **Settings → LLM provider**, enter an OpenRouter API key and a model ID (for example, any current `openai/...`, `anthropic/...`, `google/...` or `deepseek/...` model available to your account). The model is intentionally free text so it is not coupled to a stale hardcoded list. The OpenRouter request is sent only when the user invokes analysis or generation. Without a key, the local heuristic provider keeps the MVP usable.
 
-Open **Settings → Job parser** to configure Apify API key, actor, schedule, titles and locations. Click **Save settings**, then use **Run parser now** for an immediate import. When enabled, Chrome schedules the parser alarm; supported schedule forms are `*/N * * * *` and daily `M H * * *`. Imported jobs are normalized and deduplicated before entering the dashboard.
+Open **Settings → Job parser** to configure the actor, schedule, titles and locations. Choose **This browser** to use the API key stored in IndexedDB, or **Oracle server** to use `APIFY_API_KEY` from `backend/.env` even while Chrome is closed. Click **Save settings**, then use **Run parser now** for an immediate import. Supported UTC schedule forms are `*/N * * * *` and daily `M H * * *`. Imported jobs are normalized and deduplicated before entering the dashboard.
 
 ## Architecture
+
+See also [`docs/REQUIREMENTS_AUDIT.md`](docs/REQUIREMENTS_AUDIT.md) for a point-by-point mapping to the original product workflow and explicit browser constraints.
 
 ```text
 Side Panel (React)
@@ -83,11 +88,13 @@ Side Panel (React)
 
 ### Job Session behavior
 
-Analyze captures the current tab’s bounded HTML snapshot, visible text, URL and metadata, normalizes it into `Job`, deduplicates by external ID/canonical URL/company-title-location, persists a `JobSession`, and then runs analysis. A screenshot is not required for Phase 1; failure of any optional context element does not discard the session. Active sessions and detected fields are autosaved locally and restored when the side panel reopens; closing the tab closes the session. Application answers are persisted with the session and an `ApplicationRecord`.
+Analyze captures the current tab’s bounded HTML snapshot, visible text, structured metadata, URL, a compressed screenshot and PDF links, normalizes it into `Job`, deduplicates by external ID/canonical URL/company-title-location, persists a `JobSession`, and then runs analysis. Screenshots are sent to the selected LLM only when page text is sparse; a text-only retry keeps non-vision models usable. Failure of optional context does not discard the session. Active sessions and detected fields are autosaved locally and restored when the side panel reopens; closing the linked tab closes the session. Application-page context, final answers and the exact resume version are persisted with the session and an `ApplicationRecord`.
 
 ### Privacy
 
 Data is local by default in IndexedDB. API keys are not placed in source or build-time environment variables. No browsing history is collected. Only bounded, relevant job/resume/profile context is included in provider prompts. Do not enable a provider unless you accept sending the selected context to it.
+
+Exported backups contain sensitive resume and application data even though API keys and session tokens are removed. Store backup files in encrypted storage. **Clear all data** requires confirmation and deletes synchronized records and resume files from the connected Oracle server as well as this browser.
 
 ## Extending providers
 
@@ -95,4 +102,4 @@ Implement `LLMProvider` in `src/services/llm`, or `JobSourceProvider` in `src/se
 
 ## Tests
 
-Unit coverage includes normalization, URL/title/location deduplication, resume fallback extraction, field classification, bounded field context and local matching. Run `npm test` for the current suite.
+Unit coverage includes normalization, URL/title/location deduplication, resume fallback extraction, safe field classification, global field rules, bounded field context, local matching and backend parser normalization/scheduling. Run `npm test` for the extension suite. Backend tests run with `pytest` inside the API image.

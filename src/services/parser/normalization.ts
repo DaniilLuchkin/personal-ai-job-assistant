@@ -7,11 +7,13 @@ const firstMatch = (text: string, patterns: RegExp[]) => patterns.map((pattern) 
 
 export function normalizePageContext(context: PageContext): Job {
   const text = normalizeText(context.extractedText); const metadata = context.metadata;
+  const description = normalizeText(metadata.description || context.extractedText);
   const title = metadata.title || context.title || 'Untitled role'; const company = metadata.company || firstMatch(text, [/at ([A-Z][\w .&-]{2,})/]) || 'Unknown company';
   const location = metadata.location || firstMatch(text, [/(?:location|based in|job location)[:\s]+([^|.]{2,60})/i]) || '';
-  const lines = splitLines(context.extractedText); const requirements = lines.filter((line) => /experience|degree|proficiency|knowledge|ability|skills?/i.test(line)).slice(0, 16);
+  const lines = splitLines(metadata.description || context.extractedText); const requirements = lines.filter((line) => /experience|degree|proficiency|knowledge|ability|skills?|qualification/i.test(line)).slice(0, 16);
   const responsibilities = lines.filter((line) => /responsibilit|manage|coordinate|develop|lead|support|create|analy[sz]e/i.test(line)).slice(0, 16);
-  const discoveredAt = now(); return { id: uid('job'), title, company, location, remoteType: metadata.remoteType || remoteType(text), employmentType: metadata.employmentType, salary: metadata.salary || firstMatch(text, [/((?:\$|CAD|USD)\s?[\d,]+(?:\s?[-–]\s?(?:\$|CAD|USD)?\s?[\d,]+)?\s?(?:per year|annually|\/yr)?)/i]), description: text, responsibilities, requirements, preferredQualifications: [], skills: [], benefits: [], source: context.url ? new URL(context.url).hostname : 'browser', sourceUrl: context.url, applicationUrl: metadata.applicationUrl || context.url, externalId: metadata.externalId, discoveredAt, lastSeenAt: discoveredAt, status: 'Saved', notes: '', statusHistory: [], lastActivityAt: discoveredAt };
+  const sourceUrl = metadata.sourceUrl || context.url;
+  const discoveredAt = now(); return { id: uid('job'), title, company, location, remoteType: metadata.remoteType || remoteType(text), employmentType: metadata.employmentType, salary: metadata.salary || firstMatch(text, [/((?:\$|CAD|USD)\s?[\d,]+(?:\s?[-–]\s?(?:\$|CAD|USD)?\s?[\d,]+)?\s?(?:per year|annually|\/yr)?)/i]), description, responsibilities, requirements, preferredQualifications: metadata.preferredQualifications || [], skills: metadata.skills || [], benefits: metadata.benefits || [], source: sourceUrl ? new URL(sourceUrl).hostname : 'browser', sourceUrl, applicationUrl: metadata.applicationUrl || context.url, externalId: metadata.externalId, postedAt: metadata.postedAt, discoveredAt, lastSeenAt: discoveredAt, status: 'Saved', notes: '', statusHistory: [], lastActivityAt: discoveredAt };
 }
 
 const stringValue = (value: unknown) => typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();

@@ -8,9 +8,10 @@ export class ApifyProvider implements JobSourceProvider {
     if (!this.apiKey || !this.actor) throw new Error('Configure an Apify API key and actor first.');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 130_000);
+    const actorId = this.actor.trim().replace('/', '~');
     let response: Response;
     try {
-      response = await fetch(`https://api.apify.com/v2/acts/${encodeURIComponent(this.actor)}/runs?token=${encodeURIComponent(this.apiKey)}&waitForFinish=120`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ jobTitles: settings.jobTitles, keywords: settings.keywords, locations: settings.locations, remoteTypes: settings.remoteTypes, platforms: settings.platforms, excludeKeywords: settings.excludeKeywords, minimumSalary: settings.minimumSalary }) });
+      response = await fetch(`https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(this.apiKey)}&waitForFinish=120`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ jobTitles: settings.jobTitles, keywords: settings.keywords, locations: settings.locations, remoteTypes: settings.remoteTypes, platforms: settings.platforms, excludeKeywords: settings.excludeKeywords, minimumSalary: settings.minimumSalary }) });
     } finally {
       clearTimeout(timer);
     }

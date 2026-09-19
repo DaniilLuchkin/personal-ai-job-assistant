@@ -134,6 +134,12 @@ export async function deleteRemoteRecord(
   if (!response.ok) throw new Error(`Server delete failed (${response.status})`);
 }
 
+export async function clearBackendData(settings: Settings): Promise<void> {
+  if (!settings.syncEnabled || !settings.backendUrl.trim() || !settings.backendToken) return;
+  const response = await fetchWithTimeout(`${baseUrl(settings)}/api/v1/data`, { method: 'DELETE', headers: headers(settings) }, 30_000);
+  if (!response.ok) throw new Error(`Server data deletion failed (${response.status})`);
+}
+
 export async function uploadResumeFile(
   settings: Settings,
   resumeId: string,
@@ -180,6 +186,8 @@ export async function backendChat(
   request: {
     system: string;
     user: string;
+    images?: string[];
+    model?: string;
     temperature?: number;
     maxTokens?: number;
   },
@@ -195,4 +203,33 @@ export async function backendChat(
   );
   if (!response.ok) throw new Error(`Server LLM request failed (${response.status})`);
   return (await response.json()) as { content: string; model: string };
+}
+
+const parserPayload = (settings: Settings) => ({
+  enabled: settings.parserEnabled,
+  actor: settings.apifyActor,
+  schedule: settings.parserSchedule,
+  jobTitles: settings.jobTitles,
+  keywords: settings.keywords,
+  locations: settings.locations,
+  remoteTypes: settings.remoteTypes,
+  platforms: settings.platforms,
+  excludeKeywords: settings.excludeKeywords,
+  minimumSalary: settings.minimumSalary,
+});
+
+export async function saveBackendParserConfig(settings: Settings): Promise<{ server_configured: boolean }> {
+  if (!settings.syncEnabled || !settings.backendUrl.trim() || !settings.backendToken) throw new Error('Connect Cloud sync before selecting Oracle parser execution.');
+  const response = await fetchWithTimeout(`${baseUrl(settings)}/api/v1/parser/config`, { method: 'POST', headers: headers(settings), body: JSON.stringify(parserPayload(settings)) });
+  if (!response.ok) throw new Error(`Server parser configuration failed (${response.status})`);
+  return await response.json() as { server_configured: boolean };
+}
+
+export async function runBackendParser(settings: Settings): Promise<{ added: number; updated: number; received: number }> {
+  const response = await fetchWithTimeout(`${baseUrl(settings)}/api/v1/parser/run`, { method: 'POST', headers: headers(settings) }, 150_000);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: string };
+    throw new Error(body.detail || `Server parser failed (${response.status})`);
+  }
+  return await response.json() as { added: number; updated: number; received: number };
 }

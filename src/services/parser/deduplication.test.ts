@@ -8,4 +8,5 @@ describe('job deduplication', () => {
   it('normalizes tracking params from canonical URLs', () => expect(jobDeduplicationKey(job())).toBe(jobDeduplicationKey(job({ sourceUrl: 'https://linkedin.com/jobs/view/123' }))));
   it('matches an existing job by external ID before title', () => expect(findDuplicateJob(job({ externalId: 'abc' }), [job({ id: 'existing', externalId: 'abc' })])?.id).toBe('existing'));
   it('uses company/title/location when URL is absent', () => expect(jobDeduplicationKey(job({ sourceUrl: '' }))).toBe(jobDeduplicationKey(job({ sourceUrl: '', title: 'Project Coordinator' }))));
+  it('matches by canonical URL even when only one source has an external id', () => expect(findDuplicateJob(job({ externalId: undefined }), [job({ id: 'existing', externalId: 'platform-123' })])?.id).toBe('existing'));
 });
