@@ -18,3 +18,7 @@ nav { display:flex; flex-direction:column; gap:4px; } .nav-item { color:#777f8e;
 .input-action { display:flex; gap:6px; align-items:center; } .input-action input { flex:1; min-width:0; }
 .field-category-select { border:0; background:transparent; color:inherit; font:inherit; text-transform:capitalize; outline:0; min-width:0; cursor:pointer; }
 .field-category-select:focus { color:var(--blue); }
+.field-row { grid-template-columns:minmax(78px, .85fr) minmax(120px, 1.2fr) minmax(150px, 1.8fr) 68px; }
+.field-row > * { min-width:0; }
+.field-label strong { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; line-height:1.35; }
+.field-label small { white-space:normal; overflow-wrap:anywhere; line-height:1.25; }

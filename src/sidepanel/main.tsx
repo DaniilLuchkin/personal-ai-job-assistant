@@ -1329,7 +1329,7 @@ function SessionView({
                     </select>
                   </div>
                   <div className="field-label">
-                    <strong>{field.label}</strong>
+                    <strong title={field.label}>{field.label}</strong>
                     <small>
                       {field.name || field.type} ·{" "}
                       {Math.round(field.confidence * 100)}% confidence
