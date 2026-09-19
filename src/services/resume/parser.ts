@@ -1,13 +1,20 @@
-import { normalizeText } from '../../utils/text';
 import type { ResumeStructuredData } from '../../types/models';
 
+const normalizeResumeText = (value: string) => value
+  .replace(/\r\n?/g, '\n')
+  .split('\n')
+  .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+  .filter(Boolean)
+  .join('\n');
+
 export async function extractResumeText(file: File): Promise<string> {
-  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+  const fileName = file.name.toLowerCase();
+  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
     const mammoth = await import('mammoth');
     const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-    return normalizeText(result.value);
+    return normalizeResumeText(result.value);
   }
-  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+  if (file.type === 'application/pdf' || fileName.endsWith('.pdf')) {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
     const pages: string[] = [];
@@ -16,9 +23,9 @@ export async function extractResumeText(file: File): Promise<string> {
       const content = await page.getTextContent();
       pages.push(content.items.map((item) => 'str' in item ? item.str : '').join(' '));
     }
-    return normalizeText(pages.join('\n'));
+    return normalizeResumeText(pages.join('\n'));
   }
-  return normalizeText(await file.text());
+  return normalizeResumeText(await file.text());
 }
 
 const emptyStructured = (): ResumeStructuredData => ({ jobTitles: [], skills: [], companies: [], workExperience: [], achievements: [], projects: [], education: [], certifications: [], languages: [], tools: [], industries: [] });
