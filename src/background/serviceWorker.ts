@@ -6,6 +6,21 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
   if (message.type === 'PING') { sendResponse({ ok: true, pong: true }); return false; }
   const tabId = sender.tab?.id ?? message.tabId;
   if (!tabId) { sendResponse({ ok: false, error: 'No active tab available.' }); return false; }
-  chrome.tabs.sendMessage(tabId, message).then((response: ExtensionResponse) => sendResponse(response)).catch((error: unknown) => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unable to reach page.' }));
+  const relay = () => chrome.tabs.sendMessage(tabId, message);
+  relay().then((response: ExtensionResponse) => sendResponse(response)).catch(async () => {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      sendResponse(await relay());
+    } catch {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        const url = tab.url || '';
+        const restricted = /^(chrome|edge|about|devtools|chrome-extension):/i.test(url) || /chromewebstore\.google\.com/i.test(url);
+        sendResponse({ ok: false, error: restricted ? 'This Chrome page does not allow extensions to read it. Open the vacancy on a regular http(s) page.' : 'The page assistant is not available yet. Reload the vacancy tab and try Analyze this job again.' });
+      } catch {
+        sendResponse({ ok: false, error: 'Unable to access the active page. Reload the vacancy tab and try again.' });
+      }
+    }
+  });
   return true;
 });
