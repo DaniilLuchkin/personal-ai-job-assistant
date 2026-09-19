@@ -16,3 +16,5 @@ nav { display:flex; flex-direction:column; gap:4px; } .nav-item { color:#777f8e;
 .toast { position:fixed; z-index:10; top:17px; right:25px; background:#242a3a; color:#fff; box-shadow:0 9px 24px #22293640; border-radius:8px; padding:10px 11px; display:flex; align-items:center; gap:8px; font-size:11px; } .toast svg { color:#6fd4a7; } .toast button { color:#aab1be; background:transparent; display:grid; place-items:center; padding:2px; }
 @media (max-width:850px) { body { min-width:620px; } .sidebar { width:190px; } .content,.topbar { padding-left:22px; padding-right:22px; } .stats { grid-template-columns:repeat(2,1fr); } .session-grid { grid-template-columns:1fr; } }
 .input-action { display:flex; gap:6px; align-items:center; } .input-action input { flex:1; min-width:0; }
+.field-category-select { border:0; background:transparent; color:inherit; font:inherit; text-transform:capitalize; outline:0; min-width:0; cursor:pointer; }
+.field-category-select:focus { color:var(--blue); }
