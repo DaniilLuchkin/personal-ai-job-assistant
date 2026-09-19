@@ -16,9 +16,14 @@ export class HeuristicProvider implements LLMProvider {
   }
   async generateFieldAnswer(input: Parameters<LLMProvider['generateFieldAnswer']>[0]) {
     const p = input.profile;
-    if (/why.*(interested|want)|why this/i.test(input.fieldLabel)) return `I’m interested in the ${input.job.title} role at ${input.job.company} because it aligns with my experience in ${p.skills.slice(0, 3).join(', ') || 'cross-functional project work'} and the opportunity to contribute in a meaningful, practical way.`;
-    if (/summary|experience|fit|hire|describe/i.test(input.fieldLabel)) return `My background includes ${p.experience.slice(0, 2).join('; ') || input.resume?.structuredData.jobTitles.slice(0, 2).join(' and ') || 'relevant professional experience'}. I would bring a structured, collaborative approach to the ${input.job.title} role.`;
-    if (/cover letter/i.test(input.fieldLabel)) return `Dear Hiring Team,\n\nI’m excited to apply for the ${input.job.title} position at ${input.job.company}. My experience with ${p.skills.slice(0, 4).join(', ') || 'project coordination and stakeholder collaboration'} would allow me to contribute effectively. I would welcome the opportunity to discuss how my background fits your team.\n\nBest regards,\n${p.fullName || 'Applicant'}`;
-    return input.previousAnswer || `I’m happy to provide more detail about my experience related to the ${input.job.title} role.`;
+    const resumeData = input.resume?.structuredData;
+    const skills = [...new Set([...(p.skills || []), ...(resumeData?.skills || []), ...(resumeData?.tools || [])])].slice(0, 5);
+    const roles = [...new Set([...(resumeData?.jobTitles || []), ...(input.resume?.targetRoles || [])])].slice(0, 2);
+    const experience = [...(p.experience || []), ...((resumeData?.workExperience || []).map((item) => `${item.title} at ${item.company}`))].slice(0, 2);
+    const relevantRequirements = input.job.requirements.filter((requirement) => skills.some((skill) => requirement.toLowerCase().includes(skill.toLowerCase()) || skill.toLowerCase().includes(requirement.toLowerCase()))).slice(0, 3);
+    if (/why.*(interested|want)|why this/i.test(input.fieldLabel)) return `I’m interested in the ${input.job.title} role at ${input.job.company} because it connects my background in ${skills.join(', ') || roles.join(', ') || 'project coordination'} with the role’s focus on ${relevantRequirements.join(', ') || input.job.responsibilities.slice(0, 2).join(' and ') || 'practical, cross-functional work'}.`;
+    if (/summary|experience|fit|hire|describe/i.test(input.fieldLabel)) return `My background includes ${experience.join('; ') || roles.join(' and ') || 'relevant professional experience'}. I have worked with ${skills.join(', ') || 'cross-functional teams'} and would bring a structured, collaborative approach to the ${input.job.title} role.`;
+    if (/cover letter/i.test(input.fieldLabel)) return `Dear Hiring Team,\n\nI’m excited to apply for the ${input.job.title} position at ${input.job.company}. My background includes ${experience.join('; ') || roles.join(' and ') || 'relevant professional experience'}, with experience in ${skills.join(', ') || 'cross-functional collaboration'}. I would welcome the opportunity to discuss how this background could support your team.\n\nBest regards,\n${p.fullName || 'Applicant'}`;
+    return input.previousAnswer || `My experience in ${skills.join(', ') || roles.join(', ') || 'project coordination'} is relevant to the ${input.job.title} position, particularly where the role requires structured collaboration and reliable execution.`;
   }
 }
