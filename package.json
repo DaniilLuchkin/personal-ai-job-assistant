@@ -11,13 +11,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/rus": "^1.0.0",
     "@vitejs/plugin-react": "latest",
     "idb": "latest",
     "lucide-react": "latest",
     "mammoth": "latest",
     "pdfjs-dist": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/chrome": "latest",

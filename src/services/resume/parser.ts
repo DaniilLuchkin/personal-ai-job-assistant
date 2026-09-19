@@ -1,4 +1,5 @@
 import type { ResumeStructuredData } from '../../types/models';
+import { extractOcrText } from './ocr';
 
 const normalizeResumeText = (value: string) => value
   .replace(/\r\n?/g, '\n')
@@ -18,12 +19,16 @@ export async function extractResumeText(file: File): Promise<string> {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
     const pages: string[] = [];
+    const pdfPages = [];
     for (let index = 1; index <= pdf.numPages; index += 1) {
       const page = await pdf.getPage(index);
+      pdfPages.push(page);
       const content = await page.getTextContent();
       pages.push(content.items.map((item) => 'str' in item ? item.str : '').join(' '));
     }
-    return normalizeResumeText(pages.join('\n'));
+    const extractedText = normalizeResumeText(pages.join('\n'));
+    if (extractedText) return extractedText;
+    return normalizeResumeText(await extractOcrText(pdfPages));
   }
   return normalizeResumeText(await file.text());
 }

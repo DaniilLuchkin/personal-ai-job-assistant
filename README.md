@@ -9,6 +9,7 @@ A local-first Manifest V3 Chrome Extension for the real MVP workflow:
 - React + TypeScript + Vite Chrome extension with a Side Panel UI.
 - IndexedDB persistence behind repositories for resumes, jobs, sessions, fields, knowledge, profile, settings and applications.
 - PDF and DOCX text extraction. Original files are preserved as `Blob`s.
+- Local OCR fallback for scanned PDFs using bundled Tesseract.js `eng` + `rus` models; document images are not sent to the server.
 - Resume structured-data extraction through OpenRouter when configured, with a local heuristic fallback.
 - Client-side page context extraction (URL, visible text, bounded HTML snapshot and basic metadata).
 - OpenRouter provider abstraction plus local fallback; prompts live under `src/services/llm/prompts`.
