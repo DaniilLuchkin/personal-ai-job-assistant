@@ -60,6 +60,9 @@ nav { display:flex; flex-direction:column; gap:4px; } .nav-item { color:#777f8e;
 .file-value span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .field-value-select { width:100%; border:1px solid #e8eaf0; border-radius:6px; padding:7px 8px; outline:0; font-size:10px; color:#596171; background:#fff; }
 .field-actions { justify-content:flex-end; flex-wrap:nowrap; }
+.field-actions .small-button { white-space:nowrap; }
+.field-kind { min-width:0; }
+.field-kind .field-category-select { width:100%; max-width:100%; }
 .field-config { background:#fafaff; border-bottom:1px solid var(--line); padding:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .field-config label { display:flex; flex-direction:column; gap:5px; color:#7f8795; font-size:10px; }
 .field-config input,.field-config textarea { width:100%; border:1px solid var(--line); border-radius:6px; padding:8px; color:#596171; outline:0; resize:vertical; }
@@ -131,9 +134,13 @@ nav { display:flex; flex-direction:column; gap:4px; } .nav-item { color:#777f8e;
   .session-banner { align-items:flex-start; flex-wrap:wrap; }
   .session-actions { width:100%; justify-content:flex-start; margin-left:55px; }
   .field-summary { flex-wrap:wrap; gap:6px 14px; }
-  .field-row { grid-template-columns:minmax(90px,.8fr) minmax(130px,1.2fr); align-items:start; gap:8px; }
-  .field-row > :nth-child(3) { grid-column:1/-1; }
-  .field-actions { grid-column:1/-1; justify-content:flex-start; }
+  .fields-table { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+  .field-row { grid-template-columns:minmax(0,1fr) minmax(118px,auto); grid-template-areas:"label kind" "value value" "actions actions"; align-items:start; gap:8px 10px; padding:11px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+  .field-kind { grid-area:kind; justify-self:end; max-width:100%; }
+  .field-label { grid-area:label; }
+  .field-row > :nth-child(3) { grid-area:value; width:100%; }
+  .field-actions { grid-area:actions; justify-content:flex-end; width:100%; }
+  .field-config { margin-top:-8px; border:1px solid var(--line); border-top:0; border-radius:0 0 9px 9px; }
   .field-config { grid-template-columns:1fr; }
   .field-config .memory-actions { grid-column:1; white-space:normal; }
   .submit-bar { margin-left:-14px; margin-right:-14px; padding:12px 14px; gap:10px; align-items:flex-start; flex-direction:column; }
@@ -147,4 +154,10 @@ nav { display:flex; flex-direction:column; gap:4px; } .nav-item { color:#777f8e;
   .modal-backdrop { padding:8px; }
   .modal { width:100%; max-height:96vh; padding:14px; }
   .diff-grid pre,.diff-grid textarea { min-height:260px; }
+}
+
+@media (max-width:440px) {
+  .field-row { grid-template-columns:1fr; grid-template-areas:"label" "kind" "value" "actions"; }
+  .field-kind { justify-self:stretch; }
+  .field-actions { justify-content:flex-start; flex-wrap:wrap; }
 }

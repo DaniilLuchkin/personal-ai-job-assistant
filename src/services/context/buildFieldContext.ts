@@ -1,4 +1,5 @@
 import type { FormField, Job, KnowledgeItem, PageContext, Resume, UserProfile } from '../../types/models';
+import { inferFieldAnswerKind, selectResumeEvidence } from '../llm/fieldAnswer';
 
 const tokens = (value: string) => new Set(value.toLowerCase().match(/[\p{L}\p{N}+#.-]{3,}/gu) ?? []);
 
@@ -17,11 +18,14 @@ const relevantKnowledge = (field: FormField, job: Job, knowledge: KnowledgeItem[
     .map(({ item }) => item);
 };
 
-export const buildFieldContext = (field: FormField, job: Job, resume: Resume | undefined, profile: UserProfile, knowledge: KnowledgeItem[], applicationPage?: PageContext) => ({
-  field: { label: field.label, name: field.name, type: field.type, instructions: field.instructions, prompt: field.prompt },
+export const buildFieldContext = (field: FormField, job: Job, resume: Resume | undefined, profile: UserProfile, knowledge: KnowledgeItem[], applicationPage?: PageContext) => {
+  const answerKind = inferFieldAnswerKind(field.label, field.name);
+  return {
+  field: { label: field.label, name: field.name, type: field.type, instructions: field.instructions, prompt: field.prompt, answerKind },
   job: { id: job.id, title: job.title, company: job.company, description: job.description.slice(0, 9000), requirements: job.requirements },
   applicationPage: applicationPage ? { url: applicationPage.url, title: applicationPage.title, text: applicationPage.extractedText.slice(0, 3500) } : undefined,
-  resume: resume ? { id: resume.id, name: resume.name, text: resume.parsedText.slice(0, 9000), data: resume.structuredData } : undefined,
+  resume: resume ? { id: resume.id, name: resume.name, text: resume.parsedText.slice(0, 9000), data: resume.structuredData, evidence: selectResumeEvidence(field.label, field.name, answerKind, job, resume, profile) } : undefined,
   profile,
   knowledge: relevantKnowledge(field, job, knowledge),
-});
+  };
+};

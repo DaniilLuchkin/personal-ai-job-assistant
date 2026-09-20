@@ -6,6 +6,7 @@ import { jobAnalysisPrompt } from './prompts/jobAnalysis';
 import { resumeAdaptationPrompt } from './prompts/resumeAdaptation';
 import { normalizeJobAnalysis, normalizeResumeStructuredData } from './validation';
 import { parseLLMJson } from './json';
+import { cleanFieldAnswer, isUsefulFieldAnswer } from './fieldAnswer';
 
 export class BackendLLMProvider implements LLMProvider {
   readonly name = 'Oracle / OpenRouter';
@@ -21,5 +22,18 @@ export class BackendLLMProvider implements LLMProvider {
     if (adaptedText.length < 100) throw new Error('The LLM did not return a complete adapted resume.');
     return { adaptedText, changeSummary: Array.isArray(result.changeSummary) ? result.changeSummary.map(String).filter(Boolean) : [], targetTitle: typeof result.targetTitle === 'string' && result.targetTitle.trim() ? result.targetTitle.trim() : job.title };
   }
-  async generateFieldAnswer(input: Parameters<LLMProvider['generateFieldAnswer']>[0]) { return this.generateText({ system: 'You help a candidate write truthful application answers. Return only the answer text.', user: fieldGenerationPrompt(input), maxTokens: 1000 }); }
+  async generateFieldAnswer(input: Parameters<LLMProvider['generateFieldAnswer']>[0]) {
+    const request: LLMRequest = {
+      system: 'You write truthful job application answers. The application field question is authoritative. Select relevant candidate facts from the supplied resume evidence and return only polished answer text.',
+      user: fieldGenerationPrompt(input),
+      temperature: Math.min(this.settings.temperature, 0.35),
+      maxTokens: 1000,
+    };
+    let answer = cleanFieldAnswer(await this.generateText(request));
+    if (!isUsefulFieldAnswer(answer, input)) {
+      answer = cleanFieldAnswer(await this.generateText({ ...request, system: `${request.system} Your previous response was unusable. Write a coherent direct answer with normal prose and no meta-commentary.` }));
+    }
+    if (!isUsefulFieldAnswer(answer, input)) throw new Error('The LLM did not produce a usable answer. Check the selected OpenRouter model and try again.');
+    return answer;
+  }
 }

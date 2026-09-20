@@ -711,14 +711,21 @@ function App() {
         return;
       }
       const context = buildFieldContext(field, job, resume, profile, knowledge, session.applicationPageContext);
+      if (!resume || !resume.parsedText.trim()) {
+        throw new Error('Select a parsed resume in Resume Pool before generating an application answer.');
+      }
       const provider = getLLMProvider(settings);
       const answer = await provider.generateFieldAnswer({
         fieldLabel: context.field.label,
+        fieldName: context.field.name,
+        fieldType: context.field.type,
+        answerKind: context.field.answerKind,
         instructions: context.field.instructions,
         customPrompt: context.field.prompt,
         previousAnswer: field.value || undefined,
         job,
         resume,
+        resumeEvidence: context.resume?.evidence,
         profile,
         knowledge: context.knowledge.map((item) => item.answer),
         applicationContext: context.applicationPage?.text,
@@ -731,10 +738,10 @@ function App() {
         items.map((item) =>
           item.id === field.id
             ? {
-                ...item,
-                value: answer,
-                status: "review",
-                source: provider.name,
+                  ...item,
+                  value: answer,
+                  status: "review",
+                  source: `${provider.name} · ${resume.name}`,
               }
             : item,
         ),
@@ -756,7 +763,7 @@ function App() {
             }
           : value,
       );
-      setToast(`Generated with ${provider.name}`);
+      setToast(`Generated from ${resume.name} with ${provider.name}`);
     } catch (error) {
       notifyError(error);
     } finally {
